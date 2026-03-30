@@ -14,15 +14,20 @@ async function api(method, path, body = null) {
     },
     ...(body ? { body: JSON.stringify(body) } : {})
   };
-  const res = await fetch(API_BASE + '/api' + path, opts);
+  const res  = await fetch(API_BASE + '/api' + path, opts);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'API error');
   return data;
 }
 
+// Fire-and-forget activity logger — calls the backend log endpoint
+async function logActivity(action, detail = '') {
+  try { await api('POST', '/settings/activity-log', { action, detail }); } catch(e) {}
+}
+
 async function loadAllData() {
   try {
-    const [sales, stock, rawMats, customers, suppliers, expenses, users, orders] =
+    const [sales, stock, rawMats, customers, suppliers, expenses, users, orders, settings] =
       await Promise.all([
         api('GET', '/sales'),
         api('GET', '/stock'),
@@ -32,15 +37,22 @@ async function loadAllData() {
         api('GET', '/expenses'),
         api('GET', '/users'),
         api('GET', '/orders'),
+        api('GET', '/settings'),
       ]);
-    db.sales = sales;
-    db.inventory = stock;       // keeps old key for full compatibility
+    db.sales        = sales;
+    db.inventory    = stock;
     db.rawMaterials = rawMats;
-    db.customers = customers;
-    db.suppliers = suppliers;
-    db.expenses = expenses;
-    db.users = users;
-    db.orders = orders;
+    db.customers    = customers;
+    db.suppliers    = suppliers;
+    db.expenses     = expenses;
+    db.users        = users;
+    db.orders       = orders;
+
+    // Apply security settings
+    appSettings.session_timeout_minutes = parseInt(settings.session_timeout_minutes) || 20;
+    appSettings.employee_login_enabled  = settings.employee_login_enabled !== 'false';
+    appSettings.manager_login_enabled   = settings.manager_login_enabled  !== 'false';
+    SESSION_TIMEOUT_MS = appSettings.session_timeout_minutes * 60 * 1000;
   } catch (err) {
     console.error('Failed to load data:', err);
     toast('Could not load data from server. Is the backend running?', 'danger');
@@ -59,9 +71,9 @@ async function loadAllData() {
 //     Add or remove sections here to change access.
 // ─────────────────────────────────────────────────────────────
 const PERMISSIONS = {
-  Admin: ['dashboard', 'sales', 'orders', 'inventory', 'rawMaterials', 'customers', 'suppliers', 'users', 'finance', 'reports', 'notifications', 'settings'],
-  Manager: ['dashboard', 'sales', 'reports', 'inventory', 'rawMaterials', 'customers', 'notifications'],
-  Employee: ['sales', 'customers', 'notifications']
+  Admin:    ['dashboard','sales','orders','inventory','rawMaterials','customers','suppliers','users','finance','reports','notifications','settings'],
+  Manager:  ['dashboard','sales','reports','inventory','rawMaterials','customers','notifications'],
+  Employee: ['sales','customers','notifications']
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -69,8 +81,11 @@ const PERMISSIONS = {
 //     The timer resets every time the user clicks or types.
 //     When it fires, the user is logged out automatically.
 // ─────────────────────────────────────────────────────────────
-const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes in milliseconds
+let SESSION_TIMEOUT_MS = 20 * 60 * 1000; // overridden by DB setting
 let sessionTimer = null;
+
+// Holds security settings loaded from backend
+const appSettings = { session_timeout_minutes: 20, employee_login_enabled: true, manager_login_enabled: true };
 
 function startSessionTimer() {
   // Only applies to Manager and Employee — Admins stay logged in
@@ -78,7 +93,8 @@ function startSessionTimer() {
   clearSessionTimer(); // reset any existing timer
   sessionTimer = setTimeout(() => {
     // Time is up — show a message then log out
-    alert('⏰ Your session has expired after 20 minutes of inactivity.\nYou have been logged out for security.');
+    alert(`⏰ Your session has expired after ${appSettings.session_timeout_minutes} minutes of inactivity.
+You have been logged out for security.`);
     doLogout();
   }, SESSION_TIMEOUT_MS);
 }
@@ -98,7 +114,7 @@ function resetSessionTimer() {
 }
 
 // Listen for any mouse click or keypress to reset the idle timer
-document.addEventListener('click', resetSessionTimer);
+document.addEventListener('click',   resetSessionTimer);
 document.addEventListener('keydown', resetSessionTimer);
 
 // ─────────────────────────────────────────────────────────────
@@ -107,12 +123,12 @@ document.addEventListener('keydown', resetSessionTimer);
 //     formatMoney() converts to whatever the user has selected.
 // ─────────────────────────────────────────────────────────────
 const CURRENCIES = {
-  UGX: { symbol: 'UGX', rate: 1, dec: 0, name: 'Ugandan Shilling' },
-  USD: { symbol: '$', rate: 0.000272, dec: 2, name: 'US Dollar' },
-  KES: { symbol: 'KES', rate: 0.03571, dec: 0, name: 'Kenyan Shilling' },
-  EUR: { symbol: '€', rate: 0.000251, dec: 2, name: 'Euro' },
-  GBP: { symbol: '£', rate: 0.000215, dec: 2, name: 'British Pound' },
-  TZS: { symbol: 'TZS', rate: 0.6849, dec: 0, name: 'Tanzanian Shilling' },
+  UGX: { symbol: 'UGX',  rate: 1,          dec: 0, name: 'Ugandan Shilling'  },
+  USD: { symbol: '$',    rate: 0.000272,    dec: 2, name: 'US Dollar'         },
+  KES: { symbol: 'KES',  rate: 0.03571,     dec: 0, name: 'Kenyan Shilling'   },
+  EUR: { symbol: '€',    rate: 0.000251,    dec: 2, name: 'Euro'              },
+  GBP: { symbol: '£',    rate: 0.000215,    dec: 2, name: 'British Pound'     },
+  TZS: { symbol: 'TZS',  rate: 0.6849,      dec: 0, name: 'Tanzanian Shilling'},
 };
 
 let activeCurrency = 'UGX';  // Changes when user picks from the dropdown
@@ -151,12 +167,12 @@ let currentSection = null;
 //     You can add more users later from inside the app (Users page).
 // ─────────────────────────────────────────────────────────────
 const db = {
-  sales: [],   // Will fill up as you record real sales
+  sales:     [],   // Will fill up as you record real sales
   inventory: [],   // Add your real products from the Inventory page
   customers: [],   // Add real customers from the Customers page
   suppliers: [],   // Add real suppliers from the Suppliers page
-  orders: [],   // Orders will appear here as they are created
-  expenses: [],   // Record real expenses from the Financial page
+  orders:    [],   // Orders will appear here as they are created
+  expenses:  [],   // Record real expenses from the Financial page
 
   // ── YOUR ADMIN LOGIN ──────────────────────────────────────────
   // ✏️  CHANGE the name, email and password below to YOUR real details
@@ -164,12 +180,12 @@ const db = {
   //     at first. You can create more accounts from inside the app.
   users: [
     {
-      id: 'USR-001',
-      name: 'Mulindwa Ian Edward',       // ← change this
-      email: 'mulindwaianedward@gmail.com',       // ← change this (this is your login email)
-      password: 'edward@2002',  // ← change this (make it hard to guess!)
-      role: 'Admin',
-      status: 'Active',
+      id:        'USR-001',
+      name:      'Mulindwa Ian Edward',       // ← change this
+      email:     'mulindwaianedward@gmail.com',       // ← change this (this is your login email)
+      password:  'edward@2002',  // ← change this (make it hard to guess!)
+      role:      'Admin',
+      status:    'Active',
       lastLogin: 'Never'
     }
   ]
@@ -178,10 +194,10 @@ const db = {
 // ─────────────────────────────────────────────────────────────
 // 5.  CHART DATA
 // ─────────────────────────────────────────────────────────────
-const weeklySalesUGX = [0, 0, 0, 0, 0, 0, 0];           // Will populate as real sales are recorded
-const monthlySalesUGX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; // Will populate as real sales are recorded
-const weeklyLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const monthLabels = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
+const weeklySalesUGX  = [0,0,0,0,0,0,0];           // Will populate as real sales are recorded
+const monthlySalesUGX = [0,0,0,0,0,0,0,0,0,0,0,0]; // Will populate as real sales are recorded
+const weeklyLabels    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const monthLabels     = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
 
 
 /* ══════════════════════════════════════════════════════════════
@@ -190,7 +206,7 @@ const monthLabels = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'De
 
 async function doLogin() {
   const email = document.getElementById('login-email').value.trim();
-  const pass = document.getElementById('login-pass').value;
+  const pass  = document.getElementById('login-pass').value;
   const errEl = document.getElementById('login-error');
   errEl.style.display = 'none';
 
@@ -199,17 +215,17 @@ async function doLogin() {
   try {
     const data = await api('POST', '/auth/login', { email, password: pass });
 
-    authToken = data.token;
+    authToken   = data.token;
     localStorage.setItem('bms_token', authToken);
     currentUser = data.user;
 
     document.getElementById('user-name-nav').textContent = currentUser.name;
     document.getElementById('user-role-nav').textContent = currentUser.role;
-    document.getElementById('user-avatar').textContent = initials(currentUser.name);
+    document.getElementById('user-avatar').textContent   = initials(currentUser.name);
 
     applyPermissions();
     document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
+    document.getElementById('app').style.display          = 'block';
     startSessionTimer();
 
     await loadAllData();
@@ -223,21 +239,22 @@ async function doLogin() {
 
 function showLoginError(msg) {
   const el = document.getElementById('login-error');
-  el.textContent = msg;
-  el.style.display = 'block';
+  el.textContent    = msg;
+  el.style.display  = 'block';
 }
 
 function doLogout() {
+  logActivity('Logout', 'User logged out');
   authToken = null;
   localStorage.removeItem('bms_token');
   clearSessionTimer(); // Stop the timeout clock when logging out
-  currentUser = null;
+  currentUser  = null;
   currentSection = null;
-  document.getElementById('app').style.display = 'none';
+  document.getElementById('app').style.display          = 'none';
   document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('login-email').value = '';
-  document.getElementById('login-pass').value = '';
-  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-email').value          = '';
+  document.getElementById('login-pass').value           = '';
+  document.getElementById('login-error').style.display  = 'none';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -252,7 +269,7 @@ function applyPermissions() {
   // Also show the nav-label only if at least one item in its section is visible
   document.querySelectorAll('.nav-section').forEach(section => {
     const hasVisible = [...section.querySelectorAll('.nav-item')].some(i => i.style.display !== 'none');
-    const label = section.querySelector('.nav-label');
+    const label      = section.querySelector('.nav-label');
     if (label) label.style.display = hasVisible ? 'block' : 'none';
   });
 }
@@ -287,33 +304,33 @@ function nav(section, silent = false) {
 
   // Update topbar title
   const titles = {
-    dashboard: 'Dashboard', sales: 'Sales & Transactions', orders: 'Order Management',
-    inventory: 'Stock / Finished Goods', rawMaterials: 'Raw Material Inventory',
-    customers: 'Customer Management', suppliers: 'Supplier Management',
-    users: 'User Management', finance: 'Financial Management', reports: 'Reports',
-    notifications: 'Notifications & Alerts', settings: 'System Settings'
+    dashboard:'Dashboard', sales:'Sales & Transactions', orders:'Order Management',
+    inventory:'Stock / Finished Goods', rawMaterials:'Raw Material Inventory',
+    customers:'Customer Management', suppliers:'Supplier Management',
+    users:'User Management', finance:'Financial Management', reports:'Reports',
+    notifications:'Notifications & Alerts', settings:'System Settings'
   };
   document.getElementById('page-title').textContent = titles[section] || section;
 
   // Destroy any previous Chart.js chart to prevent memory leaks
-  if (activeChart) { try { activeChart.destroy(); } catch (e) { } activeChart = null; }
+  if (activeChart) { try { activeChart.destroy(); } catch(e){} activeChart = null; }
 
   currentSection = section;
 
   // Call the right render function
   const renders = {
-    dashboard: renderDashboard,
-    sales: renderSales,
-    orders: renderOrders,
-    inventory: renderInventory,
-    rawMaterials: renderRawMaterials,
-    customers: renderCustomers,
-    suppliers: renderSuppliers,
-    users: renderUsers,
-    finance: renderFinance,
-    reports: renderReports,
+    dashboard:     renderDashboard,
+    sales:         renderSales,
+    orders:        renderOrders,
+    inventory:     renderInventory,
+    rawMaterials:  renderRawMaterials,
+    customers:     renderCustomers,
+    suppliers:     renderSuppliers,
+    users:         renderUsers,
+    finance:       renderFinance,
+    reports:       renderReports,
     notifications: renderNotifications,
-    settings: renderSettings,
+    settings:      renderSettings,
   };
   if (renders[section]) renders[section]();
 }
@@ -325,7 +342,7 @@ function nav(section, silent = false) {
 
 function openModal(title, html) {
   document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal-body').innerHTML   = html;
   document.getElementById('modal-overlay').classList.add('open');
 }
 
@@ -342,21 +359,21 @@ function closeModal(e) {
 
 // Get initials from a name e.g. "Sarah Manager" → "SM"
 function initials(name) {
-  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  return name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
 }
 
 // Colour-coded status badge
 function badge(s) {
   const map = {
-    Completed: 'badge-green', Active: 'badge-green', Paid: 'badge-green', 'In Stock': 'badge-green',
-    Platinum: 'badge-purple', Gold: 'badge-amber', Silver: 'badge-blue', Bronze: 'badge-gray',
-    Pending: 'badge-amber', Processing: 'badge-blue',
-    'Low Stock': 'badge-amber', 'Out of Stock': 'badge-red',
-    Refunded: 'badge-red', Cancelled: 'badge-red', Blocked: 'badge-red',
-    Inactive: 'badge-gray', Overdue: 'badge-red',
-    Admin: 'badge-purple', Manager: 'badge-blue', Employee: 'badge-gray',
+    Completed:'badge-green', Active:'badge-green', Paid:'badge-green', 'In Stock':'badge-green',
+    Platinum:'badge-purple', Gold:'badge-amber',   Silver:'badge-blue', Bronze:'badge-gray',
+    Pending:'badge-amber',   Processing:'badge-blue',
+    'Low Stock':'badge-amber', 'Out of Stock':'badge-red',
+    Refunded:'badge-red',   Cancelled:'badge-red', Blocked:'badge-red',
+    Inactive:'badge-gray',  Overdue:'badge-red',
+    Admin:'badge-purple',   Manager:'badge-blue',  Employee:'badge-gray',
   };
-  return `<span class="badge ${map[s] || 'badge-gray'}">${s}</span>`;
+  return `<span class="badge ${map[s]||'badge-gray'}">${s}</span>`;
 }
 
 // Simple confirm helper that returns true/false
@@ -377,10 +394,10 @@ function toast(msg, type = 'success') {
    PAGE: DASHBOARD
    ══════════════════════════════════════════════════════════════ */
 function renderDashboard() {
-  const totalSales = db.sales.filter(s => s.status === 'Completed').reduce((a, b) => a + b.amount, 0);
-  const totalExpenses = db.expenses.reduce((a, b) => a + b.amount, 0);
-  const profit = totalSales - totalExpenses;
-  const lowCount = db.inventory.filter(i => i.status !== 'In Stock').length;
+  const totalSales    = db.sales.filter(s => s.status === 'Completed').reduce((a,b) => a+b.amount, 0);
+  const totalExpenses = db.expenses.reduce((a,b) => a+b.amount, 0);
+  const profit        = totalSales - totalExpenses;
+  const lowCount      = db.inventory.filter(i => i.status !== 'In Stock').length;
 
   document.getElementById('content-area').innerHTML = `
     <div class="stat-grid">
@@ -389,7 +406,7 @@ function renderDashboard() {
       <div class="stat-card"><div class="stat-label">Total Expenses</div> <div class="stat-value" style="color:var(--red)">${formatMoney(totalExpenses)}</div></div>
       <div class="stat-card"><div class="stat-label">Customers</div>      <div class="stat-value">${db.customers.length}</div></div>
       <div class="stat-card"><div class="stat-label">Transactions</div>   <div class="stat-value">${db.sales.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Low Stock Items</div><div class="stat-value" style="color:${lowCount > 0 ? 'var(--orange)' : 'var(--green)'}">${lowCount}</div>${lowCount > 0 ? `<div class="stat-change stat-down">Needs reorder</div>` : ''}</div>
+      <div class="stat-card"><div class="stat-label">Low Stock Items</div><div class="stat-value" style="color:${lowCount>0?'var(--orange)':'var(--green)'}">${lowCount}</div>${lowCount>0?`<div class="stat-change stat-down">Needs reorder</div>`:''}</div>
     </div>
 
     <div class="two-col">
@@ -408,7 +425,7 @@ function renderDashboard() {
         <div class="card-header"><div class="card-title">Recent Transactions</div><button class="btn btn-ghost btn-sm" onclick="nav('sales')">View All</button></div>
         <div class="table-wrap"><table>
           <tr><th>ID</th><th>Customer</th><th>Amount</th><th>Status</th></tr>
-          ${db.sales.slice(0, 5).map(s => `<tr>
+          ${db.sales.slice(0,5).map(s => `<tr>
             <td style="color:var(--muted)">${s.id}</td>
             <td>${s.customer}</td>
             <td style="color:var(--accent);font-weight:700">${formatMoney(s.amount)}</td>
@@ -419,8 +436,8 @@ function renderDashboard() {
       <div class="card">
         <div class="card-header"><div class="card-title">Stock Alerts</div><button class="btn btn-ghost btn-sm" onclick="nav('inventory')">View All</button></div>
         ${db.inventory.filter(i => i.status !== 'In Stock').map(i => `
-          <div class="alert ${i.status === 'Out of Stock' ? 'alert-danger' : 'alert-warn'}" style="margin-bottom:8px">
-            <span>${i.status === 'Out of Stock' ? '🔴' : '🟡'}</span>
+          <div class="alert ${i.status==='Out of Stock'?'alert-danger':'alert-warn'}" style="margin-bottom:8px">
+            <span>${i.status==='Out of Stock'?'🔴':'🟡'}</span>
             <div><strong>${i.name}</strong><br><small>${i.status} — ${i.qty} left (min ${i.min})</small></div>
           </div>`).join('')}
         <div style="margin-top:12px">
@@ -436,38 +453,34 @@ function renderDashboard() {
     const mData = monthlySalesUGX.map(v => +(v * c.rate).toFixed(c.dec));
 
     const barOpts = (labels, data, color) => ({
-      type: 'bar', data: { labels, datasets: [{ data, backgroundColor: color + '33', borderColor: color, borderWidth: 1.5, borderRadius: 4 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: '#8B949E', font: { size: 11 } }, grid: { color: '#30363D22' } },
-          y: { ticks: { color: '#8B949E', font: { size: 11 }, callback: v => formatAxisVal(v) }, grid: { color: '#30363D55' } }
-        }
-      }
+      type:'bar', data:{labels, datasets:[{data, backgroundColor:color+'33', borderColor:color, borderWidth:1.5, borderRadius:4}]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+        scales:{x:{ticks:{color:'#8B949E',font:{size:11}},grid:{color:'#30363D22'}},
+                y:{ticks:{color:'#8B949E',font:{size:11},callback:v=>formatAxisVal(v)},grid:{color:'#30363D55'}}}}
     });
 
     const cW = document.getElementById('chartWeekly');
     const cM = document.getElementById('chartMonthly');
     const cP = document.getElementById('chartPie');
-    if (cW) new Chart(cW, barOpts(weeklyLabels, wData, '#F59E0B'));
-    if (cM) new Chart(cM, barOpts(monthLabels, mData, '#58A6FF'));
-    if (cP) {
+    if(cW) new Chart(cW, barOpts(weeklyLabels, wData, '#F59E0B'));
+    if(cM) new Chart(cM, barOpts(monthLabels,  mData, '#58A6FF'));
+    if(cP) {
       const catTotals = {};
-      db.sales.filter(s => s.status === 'Completed').forEach(s => {
+      db.sales.filter(s=>s.status==='Completed').forEach(s => {
         const prod = db.inventory.find(p => s.items.toLowerCase().includes(p.name.toLowerCase()));
-        const cat = prod ? prod.cat : 'Other';
+        const cat  = prod ? prod.cat : 'Other';
         catTotals[cat] = (catTotals[cat] || 0) + s.amount;
       });
       const labels = Object.keys(catTotals);
       const values = Object.values(catTotals);
-      const colors = ['#F59E0B', '#3FB950', '#58A6FF', '#D2A8FF', '#8B949E', '#F85149'];
+      const colors = ['#F59E0B','#3FB950','#58A6FF','#D2A8FF','#8B949E','#F85149'];
       if (labels.length === 0) {
         cP.parentElement.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">No sales data yet</div>`;
       } else {
         new Chart(cP, {
-          type: 'doughnut',
-          data: { labels, datasets: [{ data: values, backgroundColor: colors.slice(0, labels.length), borderWidth: 0 }] },
-          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#8B949E', font: { size: 11 }, boxWidth: 10 } } } }
+          type:'doughnut',
+          data:{labels, datasets:[{data:values, backgroundColor:colors.slice(0,labels.length), borderWidth:0}]},
+          options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:'#8B949E',font:{size:11},boxWidth:10}}}}
         });
       }
     }
@@ -475,8 +488,8 @@ function renderDashboard() {
 }
 
 function formatAxisVal(v) {
-  if (v >= 1000000) return (v / 1000000).toFixed(1) + 'M';
-  if (v >= 1000) return (v / 1000).toFixed(0) + 'K';
+  if (v >= 1000000) return (v/1000000).toFixed(1) + 'M';
+  if (v >= 1000)    return (v/1000).toFixed(0) + 'K';
   return v;
 }
 
@@ -486,7 +499,7 @@ function formatAxisVal(v) {
    ══════════════════════════════════════════════════════════════ */
 function renderSales() {
   const todaySales = db.sales.filter(s => s.date === '2026-03-23');
-  const todayTotal = todaySales.filter(s => s.status === 'Completed').reduce((a, b) => a + b.amount, 0);
+  const todayTotal = todaySales.filter(s=>s.status==='Completed').reduce((a,b)=>a+b.amount,0);
 
   document.getElementById('content-area').innerHTML = `
     <div class="card-header" style="margin-bottom:16px">
@@ -504,8 +517,8 @@ function renderSales() {
     <div class="stat-grid" style="margin-bottom:20px">
       <div class="stat-card"><div class="stat-label">Today's Sales</div>     <div class="stat-value" style="color:var(--accent)">${formatMoney(todayTotal)}</div></div>
       <div class="stat-card"><div class="stat-label">Transactions Today</div><div class="stat-value">${todaySales.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Avg. Transaction</div>  <div class="stat-value">${formatMoney(todaySales.length ? todayTotal / todaySales.length : 0)}</div></div>
-      <div class="stat-card"><div class="stat-label">Refunds</div>           <div class="stat-value" style="color:var(--red)">${db.sales.filter(s => s.status === 'Refunded').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Avg. Transaction</div>  <div class="stat-value">${formatMoney(todaySales.length ? todayTotal/todaySales.length : 0)}</div></div>
+      <div class="stat-card"><div class="stat-label">Refunds</div>           <div class="stat-value" style="color:var(--red)">${db.sales.filter(s=>s.status==='Refunded').length}</div></div>
     </div>
     <div class="card">
       <div class="card-header"><div class="card-title">Transaction History</div></div>
@@ -569,10 +582,10 @@ function openSaleModal() {
 
 async function saveSale() {
   const amount = parseFloat(document.getElementById('sale-amount').value);
-  const items = document.getElementById('sale-items').value.trim();
-  if (!items || !amount || amount <= 0) { toast('Please fill in items and amount.', 'danger'); return; }
+  const items  = document.getElementById('sale-items').value.trim();
+  if (!items || !amount || amount <= 0) { toast('Please fill in items and amount.','danger'); return; }
 
-  const custSel = document.getElementById('sale-customer');
+  const custSel  = document.getElementById('sale-customer');
   const custName = custSel.options[custSel.selectedIndex].text === '-- Walk-in Customer --'
     ? 'Walk-in Customer'
     : custSel.options[custSel.selectedIndex].text;
@@ -585,6 +598,7 @@ async function saveSale() {
       notes: document.getElementById('sale-notes') ? document.getElementById('sale-notes').value : ''
     });
     db.sales.unshift(newSale);
+    logActivity('Sale recorded', `${newSale.id} — ${custName} — ${formatMoney(amount)}`);
     closeModal();
     toast('Sale recorded successfully! 🎉');
     renderSales();
@@ -634,10 +648,10 @@ function renderOrders() {
       <button class="btn btn-primary" onclick="openModal('Create Order', createOrderForm())">+ Create Order</button>
     </div>
     <div class="stat-grid" style="margin-bottom:20px">
-      <div class="stat-card"><div class="stat-label">Pending</div>    <div class="stat-value" style="color:var(--orange)">${db.orders.filter(o => o.status === 'Pending').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Processing</div> <div class="stat-value" style="color:var(--blue)">${db.orders.filter(o => o.status === 'Processing').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Completed</div>  <div class="stat-value" style="color:var(--green)">${db.orders.filter(o => o.status === 'Completed').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Cancelled</div>  <div class="stat-value" style="color:var(--red)">${db.orders.filter(o => o.status === 'Cancelled').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Pending</div>    <div class="stat-value" style="color:var(--orange)">${db.orders.filter(o=>o.status==='Pending').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Processing</div> <div class="stat-value" style="color:var(--blue)">${db.orders.filter(o=>o.status==='Processing').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Completed</div>  <div class="stat-value" style="color:var(--green)">${db.orders.filter(o=>o.status==='Completed').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Cancelled</div>  <div class="stat-value" style="color:var(--red)">${db.orders.filter(o=>o.status==='Cancelled').length}</div></div>
     </div>
     <div class="card"><div class="card-header"><div class="card-title">All Orders</div></div>
     <div class="table-wrap"><table>
@@ -659,7 +673,7 @@ function createOrderForm() {
   return `
     <div class="form-group"><label>Customer</label>
       <select style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text)">
-        ${db.customers.map(c => `<option>${c.name}</option>`).join('')}
+        ${db.customers.map(c=>`<option>${c.name}</option>`).join('')}
       </select></div>
     <div class="form-group"><label>Items</label><input type="text" style="width:100%" placeholder="e.g. Juice x4, Bread x2"></div>
     <div class="form-grid">
@@ -678,13 +692,13 @@ function createOrderForm() {
 function updateOrderStatus(id) {
   const order = db.orders.find(o => o.id === id);
   if (!order) return;
-  const statuses = ['Pending', 'Processing', 'Completed', 'Cancelled'];
+  const statuses = ['Pending','Processing','Completed','Cancelled'];
   const next = statuses[(statuses.indexOf(order.status) + 1) % statuses.length];
   openModal(`Update Order ${id}`, `
     <p style="color:var(--muted);margin-bottom:16px">Current status: ${badge(order.status)}</p>
     <div class="form-group"><label>New Status</label>
       <select id="new-status" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text)">
-        ${statuses.map(s => `<option ${s === next ? 'selected' : ''}>${s}</option>`).join('')}
+        ${statuses.map(s=>`<option ${s===next?'selected':''}>${s}</option>`).join('')}
       </select></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -707,13 +721,13 @@ function applyOrderStatus(id) {
 function renderInventory() {
   const alerts = db.inventory.filter(i => i.status !== 'In Stock');
   document.getElementById('content-area').innerHTML = `
-    ${alerts.length ? `<div class="alert alert-warn"><span>⚠️</span><strong>${alerts.length} items need attention:</strong> ${alerts.map(i => i.name).join(', ')}</div>` : ''}
+    ${alerts.length ? `<div class="alert alert-warn"><span>⚠️</span><strong>${alerts.length} items need attention:</strong> ${alerts.map(i=>i.name).join(', ')}</div>` : ''}
     <div class="card-header" style="margin-bottom:16px">
       <div class="section-actions">
         <input class="search-bar" id="inv-search" placeholder="🔍 Search products…" oninput="filterInventory(this.value)">
         <select id="inv-cat" onchange="filterInventory()" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text)">
           <option value="">All Categories</option>
-          ${[...new Set(db.inventory.map(p => p.cat))].map(c => `<option>${c}</option>`).join('')}
+          ${[...new Set(db.inventory.map(p=>p.cat))].map(c=>`<option>${c}</option>`).join('')}
         </select>
       </div>
       <div class="section-actions">
@@ -732,7 +746,7 @@ function renderInventory() {
 
 function inventoryRow(p) {
   const pct = Math.min(Math.round((p.qty / Math.max(p.min * 3, 1)) * 100), 100);
-  const col = p.status === 'In Stock' ? 'var(--green)' : p.status === 'Low Stock' ? 'var(--orange)' : 'var(--red)';
+  const col  = p.status === 'In Stock' ? 'var(--green)' : p.status === 'Low Stock' ? 'var(--orange)' : 'var(--red)';
   return `<tr data-name="${p.name.toLowerCase()}" data-cat="${p.cat}">
     <td style="color:var(--muted);font-size:12px">${p.id}</td>
     <td><strong>${p.name}</strong></td>
@@ -754,10 +768,10 @@ function inventoryRow(p) {
 }
 
 function filterInventory(searchVal) {
-  const q = (searchVal || document.getElementById('inv-search')?.value || '').toLowerCase();
+  const q   = (searchVal || document.getElementById('inv-search')?.value || '').toLowerCase();
   const cat = (document.getElementById('inv-cat')?.value || '').toLowerCase();
   document.querySelectorAll('#inv-table tr[data-name]').forEach(row => {
-    const mQ = !q || row.dataset.name.includes(q);
+    const mQ = !q   || row.dataset.name.includes(q);
     const mC = !cat || row.dataset.cat.toLowerCase() === cat;
     row.style.display = (mQ && mC) ? '' : 'none';
   });
@@ -780,7 +794,7 @@ function openAddProductModal() {
       <div class="form-group"><label>Unit Price (UGX)</label><input type="number" id="p-price" style="width:100%" placeholder="0" min="0"></div>
       <div class="form-group"><label>Supplier</label>
         <select id="p-sup" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text)">
-          ${db.suppliers.map(s => `<option>${s.name}</option>`).join('')}
+          ${db.suppliers.map(s=>`<option>${s.name}</option>`).join('')}
         </select></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
@@ -790,18 +804,19 @@ function openAddProductModal() {
 }
 
 async function saveProduct() {
-  const name = document.getElementById('p-name').value.trim();
-  const qty = parseInt(document.getElementById('p-qty').value);
-  const min = parseInt(document.getElementById('p-min').value);
+  const name  = document.getElementById('p-name').value.trim();
+  const qty   = parseInt(document.getElementById('p-qty').value);
+  const min   = parseInt(document.getElementById('p-min').value);
   const price = parseFloat(document.getElementById('p-price').value);
-  if (!name || isNaN(qty) || isNaN(price)) { toast('Please fill all required fields.', 'danger'); return; }
+  if (!name || isNaN(qty) || isNaN(price)) { toast('Please fill all required fields.','danger'); return; }
   try {
     const prod = await api('POST', '/stock', {
       name, qty, min, price,
-      cat: document.getElementById('p-cat').value,
+      cat:      document.getElementById('p-cat').value,
       supplier: document.getElementById('p-sup').value,
     });
     db.inventory.push(prod);
+    logActivity('Stock added', `${prod.name} — qty: ${qty}`);
     closeModal();
     toast('Product added! 📦');
     renderInventory();
@@ -824,16 +839,16 @@ function editProduct(id) {
 }
 
 async function applyEditProduct(id) {
-  const p = db.inventory.find(x => x.id === id);
-  const qty = parseInt(document.getElementById('ep-qty').value);
-  const min = parseInt(document.getElementById('ep-min').value);
+  const p     = db.inventory.find(x => x.id === id);
+  const qty   = parseInt(document.getElementById('ep-qty').value);
+  const min   = parseInt(document.getElementById('ep-min').value);
   const price = parseFloat(document.getElementById('ep-price').value);
   if (!p || isNaN(qty) || isNaN(price)) return;
   try {
     await api('PUT', '/stock/' + id, { qty, min, price });
-    p.qty = qty;
-    p.min = min;
-    p.price = price;
+    p.qty    = qty;
+    p.min    = min;
+    p.price  = price;
     p.status = qty === 0 ? 'Out of Stock' : qty <= min ? 'Low Stock' : 'In Stock';
     closeModal();
     toast('Product updated! ✓');
@@ -846,8 +861,8 @@ async function deleteProduct(id) {
   try {
     await api('DELETE', '/stock/' + id);
     const idx = db.inventory.findIndex(x => x.id === id);
-    if (idx !== -1) db.inventory.splice(idx, 1);
-    toast('Product deleted.', 'danger');
+    if (idx !== -1) { logActivity('Stock deleted', `ID: ${id}`); db.inventory.splice(idx, 1); }
+    toast('Product deleted.','danger');
     renderInventory();
   } catch (err) { toast(err.message, 'danger'); }
 }
@@ -864,9 +879,9 @@ function renderCustomers() {
     </div>
     <div class="stat-grid" style="margin-bottom:20px">
       <div class="stat-card"><div class="stat-label">Total</div>    <div class="stat-value">${db.customers.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Platinum</div> <div class="stat-value" style="color:var(--purple)">${db.customers.filter(c => c.loyalty === 'Platinum').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Gold</div>     <div class="stat-value" style="color:var(--accent)">${db.customers.filter(c => c.loyalty === 'Gold').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Silver</div>   <div class="stat-value" style="color:var(--blue)">${db.customers.filter(c => c.loyalty === 'Silver').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Platinum</div> <div class="stat-value" style="color:var(--purple)">${db.customers.filter(c=>c.loyalty==='Platinum').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Gold</div>     <div class="stat-value" style="color:var(--accent)">${db.customers.filter(c=>c.loyalty==='Gold').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Silver</div>   <div class="stat-value" style="color:var(--blue)">${db.customers.filter(c=>c.loyalty==='Silver').length}</div></div>
     </div>
     <div class="card"><div class="card-header"><div class="card-title">Customer Directory</div></div>
     <div class="table-wrap"><table id="cust-table">
@@ -912,15 +927,16 @@ function openAddCustomerModal() {
 }
 
 async function saveCustomer() {
-  const name = document.getElementById('cn-name').value.trim();
+  const name  = document.getElementById('cn-name').value.trim();
   const phone = document.getElementById('cn-phone').value.trim();
-  if (!name || !phone) { toast('Name and phone are required.', 'danger'); return; }
+  if (!name || !phone) { toast('Name and phone are required.','danger'); return; }
   try {
     const cust = await api('POST', '/customers', {
       name, phone,
       email: document.getElementById('cn-email').value || '---',
     });
     db.customers.push(cust);
+    logActivity('Customer added', cust.name);
     closeModal();
     toast('Customer added! 👥');
     renderCustomers();
@@ -950,7 +966,7 @@ function viewCustomer(id) {
       <div style="font-weight:600;margin-bottom:8px">Purchase History</div>
       <div class="table-wrap"><table>
         <tr><th>Date</th><th>Items</th><th>Amount</th><th>Status</th></tr>
-        ${history.map(s => `<tr><td style="color:var(--muted)">${s.date}</td><td style="font-size:12px">${s.items}</td><td style="color:var(--accent)">${formatMoney(s.amount)}</td><td>${badge(s.status)}</td></tr>`).join('')}
+        ${history.map(s=>`<tr><td style="color:var(--muted)">${s.date}</td><td style="font-size:12px">${s.items}</td><td style="color:var(--accent)">${formatMoney(s.amount)}</td><td>${badge(s.status)}</td></tr>`).join('')}
       </table></div>` : '<div style="color:var(--muted);font-size:13px">No purchase history yet.</div>'}`);
 }
 
@@ -960,7 +976,7 @@ async function deleteCustomer(id) {
     await api('DELETE', '/customers/' + id);
     const idx = db.customers.findIndex(x => x.id === id);
     if (idx !== -1) db.customers.splice(idx, 1);
-    toast('Customer removed.', 'danger');
+    toast('Customer removed.','danger');
     renderCustomers();
   } catch (err) { toast(err.message, 'danger'); }
 }
@@ -985,7 +1001,7 @@ function renderSuppliers() {
         <td>${s.phone}</td>
         <td style="text-align:center">${s.items}</td>
         <td style="color:var(--muted)">${s.lastOrder}</td>
-        <td style="color:${s.balance > 0 ? 'var(--red)' : 'var(--green)'};font-weight:700">${s.balance > 0 ? formatMoney(s.balance) : '✓ Settled'}</td>
+        <td style="color:${s.balance>0?'var(--red)':'var(--green)'};font-weight:700">${s.balance > 0 ? formatMoney(s.balance) : '✓ Settled'}</td>
         <td>${badge(s.status)}</td>
         <td style="display:flex;gap:6px">
           <button class="btn btn-ghost btn-sm" onclick="toast('Order placed for ${s.name}! 📦')">Order</button>
@@ -998,7 +1014,7 @@ function renderSuppliers() {
 function markSupplierPaid(id) {
   const s = db.suppliers.find(x => x.id === id);
   if (!s) return;
-  if (s.balance === 0) { toast('No outstanding balance for this supplier.', 'danger'); return; }
+  if (s.balance === 0) { toast('No outstanding balance for this supplier.','danger'); return; }
   if (ask(`Mark ${s.name} as paid? (${formatMoney(s.balance)} outstanding)`)) {
     s.balance = 0;
     toast(`Payment recorded for ${s.name}! ✓`);
@@ -1021,12 +1037,12 @@ function openAddSupplierModal() {
 
 async function saveSupplier() {
   const name = document.getElementById('sup-name').value.trim();
-  if (!name) { toast('Company name is required.', 'danger'); return; }
+  if (!name) { toast('Company name is required.','danger'); return; }
   try {
     const sup = await api('POST', '/suppliers', {
       name,
       contact: document.getElementById('sup-contact').value || '---',
-      phone: document.getElementById('sup-phone').value || '---',
+      phone:   document.getElementById('sup-phone').value   || '---',
     });
     db.suppliers.push(sup);
     closeModal(); toast('Supplier added! 🚚'); renderSuppliers();
@@ -1063,19 +1079,19 @@ function renderUsers() {
       <div class="table-wrap"><table>
         <tr><th>Feature</th><th>Admin</th><th>Manager</th><th>Employee</th></tr>
         ${[
-      ['Dashboard', '✅', '✅', '❌'],
-      ['Record Sales', '✅', '✅', '✅'],
-      ['Orders', '✅', '❌', '❌'],
-      ['Inventory', '✅', '✅', '❌'],
-      ['Customers', '✅', '✅', '✅'],
-      ['Suppliers', '✅', '❌', '❌'],
-      ['User Management', '✅', '❌', '❌'],
-      ['Financial', '✅', '❌', '❌'],
-      ['Reports', '✅', '✅', '❌'],
-      ['Notifications', '✅', '✅', '✅'],
-      ['System Settings', '✅', '❌', '❌'],
-      ['Delete Records', '✅', '❌', '❌'],
-    ].map(r => `<tr><td>${r[0]}</td><td style="text-align:center">${r[1]}</td><td style="text-align:center">${r[2]}</td><td style="text-align:center">${r[3]}</td></tr>`).join('')}
+          ['Dashboard',      '✅','✅','❌'],
+          ['Record Sales',   '✅','✅','✅'],
+          ['Orders',         '✅','❌','❌'],
+          ['Inventory',      '✅','✅','❌'],
+          ['Customers',      '✅','✅','✅'],
+          ['Suppliers',      '✅','❌','❌'],
+          ['User Management','✅','❌','❌'],
+          ['Financial',      '✅','❌','❌'],
+          ['Reports',        '✅','✅','❌'],
+          ['Notifications',  '✅','✅','✅'],
+          ['System Settings','✅','❌','❌'],
+          ['Delete Records', '✅','❌','❌'],
+        ].map(r => `<tr><td>${r[0]}</td><td style="text-align:center">${r[1]}</td><td style="text-align:center">${r[2]}</td><td style="text-align:center">${r[3]}</td></tr>`).join('')}
       </table></div>
     </div>`;
 }
@@ -1083,13 +1099,13 @@ function renderUsers() {
 function userRow(u) {
   const isSelf = currentUser && u.id === currentUser.id;
   const permLabel = u.role === 'Admin' ? 'Full Access' : u.role === 'Manager' ? 'Dashboard + Sales + Reports + Inventory + Customers' : 'Sales + Customers Only';
-  return `<tr data-name="${u.name.toLowerCase()}" id="usr-row-${u.id}" style="${u.status === 'Blocked' ? 'opacity:0.6' : ''}">
+  return `<tr data-name="${u.name.toLowerCase()}" id="usr-row-${u.id}" style="${u.status==='Blocked'?'opacity:0.6':''}">
     <td style="color:var(--muted);font-size:12px">${u.id}</td>
     <td>
       <div style="display:flex;align-items:center;gap:8px">
-        <div class="avatar" style="width:28px;height:28px;font-size:11px;${u.status === 'Blocked' ? 'background:#2d1b1b;color:var(--red)' : ''}">${initials(u.name)}</div>
+        <div class="avatar" style="width:28px;height:28px;font-size:11px;${u.status==='Blocked'?'background:#2d1b1b;color:var(--red)':''}">${initials(u.name)}</div>
         <div>
-          <div style="font-weight:600">${u.name} ${isSelf ? '<span style="font-size:10px;color:var(--accent)">(you)</span>' : ''}</div>
+          <div style="font-weight:600">${u.name} ${isSelf?'<span style="font-size:10px;color:var(--accent)">(you)</span>':''}</div>
         </div>
       </div>
     </td>
@@ -1102,9 +1118,9 @@ function userRow(u) {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" onclick="changePasswordModal('${u.id}')" title="Change password">🔑 PW</button>
         ${u.status === 'Blocked'
-      ? `<button class="btn btn-success btn-sm" onclick="toggleBlock('${u.id}')" title="Unblock this user">✅ Unblock</button>`
-      : `<button class="btn btn-danger btn-sm" onclick="toggleBlock('${u.id}')" ${isSelf ? 'disabled title="Cannot block yourself"' : ''}>🚫 Block</button>`}
-        <button class="btn btn-danger btn-sm" onclick="removeUser('${u.id}')" ${isSelf ? 'disabled title="Cannot delete yourself"' : ''}>🗑️ Delete</button>
+          ? `<button class="btn btn-success btn-sm" onclick="toggleBlock('${u.id}')" title="Unblock this user">✅ Unblock</button>`
+          : `<button class="btn btn-danger btn-sm" onclick="toggleBlock('${u.id}')" ${isSelf?'disabled title="Cannot block yourself"':''}>🚫 Block</button>`}
+        <button class="btn btn-danger btn-sm" onclick="removeUser('${u.id}')" ${isSelf?'disabled title="Cannot delete yourself"':''}>🗑️ Delete</button>
       </div>
     </td>
   </tr>`;
@@ -1121,7 +1137,7 @@ function filterUsers(q) {
 async function toggleBlock(id) {
   const u = db.users.find(x => x.id === id);
   if (!u) return;
-  if (u.id === currentUser.id) { toast('You cannot block your own account!', 'danger'); return; }
+  if (u.id === currentUser.id) { toast('You cannot block your own account!','danger'); return; }
   if (u.status === 'Blocked') {
     if (!ask(`Unblock ${u.name}? They will be able to log in again.`)) return;
   } else {
@@ -1140,13 +1156,14 @@ async function toggleBlock(id) {
 async function removeUser(id) {
   const u = db.users.find(x => x.id === id);
   if (!u) return;
-  if (u.id === currentUser.id) { toast('You cannot delete your own account!', 'danger'); return; }
+  if (u.id === currentUser.id) { toast('You cannot delete your own account!','danger'); return; }
   if (!ask(`⚠️ Permanently delete ${u.name}?\n\nThis CANNOT be undone. The user will lose all access.`)) return;
   try {
     await api('DELETE', '/users/' + id);
     const idx = db.users.findIndex(x => x.id === id);
     if (idx !== -1) db.users.splice(idx, 1);
-    toast(`${u.name}'s account has been deleted.`, 'danger');
+    logActivity('User deleted', u.name);
+    toast(`${u.name}'s account has been deleted.`,'danger');
     renderUsers();
   } catch (err) { toast(err.message, 'danger'); }
 }
@@ -1175,20 +1192,20 @@ function changePasswordModal(id) {
 }
 
 async function applyChangePassword(id) {
-  const pw1 = document.getElementById('new-pw').value;
-  const pw2 = document.getElementById('new-pw-confirm').value;
+  const pw1   = document.getElementById('new-pw').value;
+  const pw2   = document.getElementById('new-pw-confirm').value;
   const errEl = document.getElementById('pw-error');
   errEl.style.display = 'none';
 
-  if (pw1.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display = 'block'; return; }
-  if (pw1 !== pw2) { errEl.textContent = 'Passwords do not match. Please try again.'; errEl.style.display = 'block'; return; }
+  if (pw1.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display='block'; return; }
+  if (pw1 !== pw2)    { errEl.textContent = 'Passwords do not match. Please try again.'; errEl.style.display='block'; return; }
 
   try {
     await api('PUT', '/users/' + id + '/password', { password: pw1 });
     const u = db.users.find(x => x.id === id);
     closeModal();
     toast(`Password changed for ${u ? u.name : 'user'}! 🔑`);
-  } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; }
+  } catch (err) { errEl.textContent = err.message; errEl.style.display='block'; }
 }
 
 // ── ADD NEW USER ─────────────────────────────────────────────────
@@ -1218,24 +1235,25 @@ function openAddUserModal() {
 }
 
 async function saveNewUser() {
-  const name = document.getElementById('nu-name').value.trim();
+  const name  = document.getElementById('nu-name').value.trim();
   const email = document.getElementById('nu-email').value.trim();
-  const pw = document.getElementById('nu-pw').value;
-  const role = document.getElementById('nu-role').value;
+  const pw    = document.getElementById('nu-pw').value;
+  const role  = document.getElementById('nu-role').value;
   const errEl = document.getElementById('nu-error');
   errEl.style.display = 'none';
 
-  if (!name) { errEl.textContent = 'Name is required.'; errEl.style.display = 'block'; return; }
-  if (!email) { errEl.textContent = 'Email is required.'; errEl.style.display = 'block'; return; }
-  if (pw.length < 6) { errEl.textContent = 'Password must be 6+ characters.'; errEl.style.display = 'block'; return; }
+  if (!name)          { errEl.textContent='Name is required.';               errEl.style.display='block'; return; }
+  if (!email)         { errEl.textContent='Email is required.';              errEl.style.display='block'; return; }
+  if (pw.length < 6)  { errEl.textContent='Password must be 6+ characters.'; errEl.style.display='block'; return; }
 
   try {
     const newUser = await api('POST', '/users', { name, email, password: pw, role });
     db.users.push(newUser);
+    logActivity('User created', `${name} — Role: ${role}`);
     closeModal();
     toast(`User "${name}" created successfully! 🎉`);
     renderUsers();
-  } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; }
+  } catch (err) { errEl.textContent = err.message; errEl.style.display='block'; }
 }
 
 
@@ -1243,16 +1261,16 @@ async function saveNewUser() {
    PAGE: FINANCE
    ══════════════════════════════════════════════════════════════ */
 function renderFinance() {
-  const revenue = db.sales.filter(s => s.status === 'Completed').reduce((a, b) => a + b.amount, 0);
-  const expenses = db.expenses.reduce((a, b) => a + b.amount, 0);
-  const profit = revenue - expenses;
+  const revenue  = db.sales.filter(s => s.status === 'Completed').reduce((a,b) => a+b.amount, 0);
+  const expenses = db.expenses.reduce((a,b) => a+b.amount, 0);
+  const profit   = revenue - expenses;
 
   document.getElementById('content-area').innerHTML = `
     <div class="stat-grid" style="margin-bottom:24px">
       <div class="stat-card"><div class="stat-label">Total Revenue</div>  <div class="stat-value" style="color:var(--accent)">${formatMoney(revenue)}</div></div>
       <div class="stat-card"><div class="stat-label">Total Expenses</div> <div class="stat-value" style="color:var(--red)">${formatMoney(expenses)}</div></div>
-      <div class="stat-card"><div class="stat-label">Net Profit</div>     <div class="stat-value" style="color:var(--green)">${formatMoney(profit)}</div>    <div class="stat-change ${profit >= 0 ? 'stat-up' : 'stat-down'}">Margin: ${revenue > 0 ? Math.round((profit / revenue) * 100) : 0}%</div></div>
-      <div class="stat-card"><div class="stat-label">Cash on Hand</div>   <div class="stat-value">${formatMoney(db.sales.filter(s => s.status === 'Completed' && s.method === 'Cash').reduce((a, b) => a + b.amount, 0))}</div></div>
+      <div class="stat-card"><div class="stat-label">Net Profit</div>     <div class="stat-value" style="color:var(--green)">${formatMoney(profit)}</div>    <div class="stat-change ${profit>=0?'stat-up':'stat-down'}">Margin: ${revenue > 0 ? Math.round((profit/revenue)*100) : 0}%</div></div>
+      <div class="stat-card"><div class="stat-label">Cash on Hand</div>   <div class="stat-value">${formatMoney(db.sales.filter(s=>s.status==='Completed'&&s.method==='Cash').reduce((a,b)=>a+b.amount,0))}</div></div>
     </div>
     <div class="two-col">
       <div class="card">
@@ -1281,7 +1299,7 @@ function renderFinance() {
           <div class="card-header"><div class="card-title">Profit & Loss Summary</div></div>
           <table style="width:100%;font-size:13px">
             <tr><td style="padding:7px 0;color:var(--muted)">Gross Revenue</td><td style="text-align:right;font-weight:600;color:var(--green)">+ ${formatMoney(revenue)}</td></tr>
-            ${db.expenses.map(e => `<tr><td style="padding:4px 0;color:var(--muted);font-size:12px">↳ ${e.category}</td><td style="text-align:right;color:var(--red);font-size:12px">- ${formatMoney(e.amount)}</td></tr>`).join('')}
+            ${db.expenses.map(e=>`<tr><td style="padding:4px 0;color:var(--muted);font-size:12px">↳ ${e.category}</td><td style="text-align:right;color:var(--red);font-size:12px">- ${formatMoney(e.amount)}</td></tr>`).join('')}
             <tr style="border-top:1px solid var(--border)">
               <td style="padding:10px 0;font-weight:700">NET PROFIT</td>
               <td style="text-align:right;font-size:18px;font-weight:700;color:var(--green)">+ ${formatMoney(profit)}</td>
@@ -1298,9 +1316,9 @@ function renderFinance() {
   setTimeout(() => {
     const el = document.getElementById('chartExp');
     if (el) new Chart(el, {
-      type: 'doughnut',
-      data: { labels: db.expenses.map(e => e.category), datasets: [{ data: db.expenses.map(e => e.amount), backgroundColor: ['#F59E0B', '#58A6FF', '#3FB950', '#D2A8FF', '#F85149'], borderWidth: 0 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#8B949E', font: { size: 11 }, boxWidth: 10 } } } }
+      type:'doughnut',
+      data:{labels:db.expenses.map(e=>e.category), datasets:[{data:db.expenses.map(e=>e.amount), backgroundColor:['#F59E0B','#58A6FF','#3FB950','#D2A8FF','#F85149'], borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#8B949E',font:{size:11},boxWidth:10}}}}
     });
   }, 100);
 }
@@ -1322,15 +1340,16 @@ function openAddExpenseModal() {
 }
 
 async function saveExpense() {
-  const amt = parseFloat(document.getElementById('exp-amt').value);
+  const amt  = parseFloat(document.getElementById('exp-amt').value);
   const desc = document.getElementById('exp-desc').value.trim();
-  if (!desc || !amt || amt <= 0) { toast('Please fill in all fields.', 'danger'); return; }
+  if (!desc || !amt || amt <= 0) { toast('Please fill in all fields.','danger'); return; }
   try {
     const exp = await api('POST', '/expenses', {
       category: document.getElementById('exp-cat').value,
       desc, amount: amt
     });
     db.expenses.push(exp);
+    logActivity('Expense recorded', `${exp.category} — ${formatMoney(exp.amount)}`);
     closeModal(); toast('Expense recorded! ✓'); renderFinance();
   } catch (err) { toast(err.message, 'danger'); }
 }
@@ -1341,7 +1360,7 @@ async function deleteExpense(id) {
     await api('DELETE', '/expenses/' + id);
     const idx = db.expenses.findIndex(x => x.id === id);
     if (idx !== -1) db.expenses.splice(idx, 1);
-    toast('Expense deleted.', 'danger'); renderFinance();
+    toast('Expense deleted.','danger'); renderFinance();
   } catch (err) { toast(err.message, 'danger'); }
 }
 
@@ -1350,8 +1369,8 @@ async function deleteExpense(id) {
    PAGE: REPORTS
    ══════════════════════════════════════════════════════════════ */
 function renderReports() {
-  const revenue = db.sales.filter(s => s.status === 'Completed').reduce((a, b) => a + b.amount, 0);
-  const expenses = db.expenses.reduce((a, b) => a + b.amount, 0);
+  const revenue  = db.sales.filter(s=>s.status==='Completed').reduce((a,b)=>a+b.amount,0);
+  const expenses = db.expenses.reduce((a,b)=>a+b.amount,0);
   document.getElementById('content-area').innerHTML = `
     <div class="card-header" style="margin-bottom:16px">
       <div class="section-actions">
@@ -1370,40 +1389,40 @@ function renderReports() {
       <div class="card">
         <div class="card-title" style="margin-bottom:12px">Payment Methods</div>
         ${(() => {
-      const total = db.sales.filter(s => s.status === 'Completed').reduce((a, b) => a + b.amount, 0);
-      const methods = ['Cash', 'Mobile Money', 'Bank Transfer'];
-      const colors = ['var(--green)', 'var(--blue)', 'var(--purple)'];
-      if (total === 0) return `<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0">No sales recorded yet.</div>`;
-      return methods.map((m, i) => {
-        const amt = db.sales.filter(s => s.status === 'Completed' && s.method === m).reduce((a, b) => a + b.amount, 0);
-        const pct = Math.round((amt / total) * 100);
-        return `<div style="margin-bottom:10px">
+          const total = db.sales.filter(s=>s.status==='Completed').reduce((a,b)=>a+b.amount,0);
+          const methods = ['Cash','Mobile Money','Bank Transfer'];
+          const colors  = ['var(--green)','var(--blue)','var(--purple)'];
+          if (total === 0) return `<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0">No sales recorded yet.</div>`;
+          return methods.map((m,i) => {
+            const amt = db.sales.filter(s=>s.status==='Completed'&&s.method===m).reduce((a,b)=>a+b.amount,0);
+            const pct = Math.round((amt/total)*100);
+            return `<div style="margin-bottom:10px">
               <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>${m}</span><span style="color:${colors[i]};font-weight:600">${pct}%</span></div>
               <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${colors[i]}"></div></div>
             </div>`;
-      }).join('');
-    })()}
+          }).join('');
+        })()}
       </div>
       <div class="card">
         <div class="card-title" style="margin-bottom:12px">Top Products</div>
         ${(() => {
-      const productTotals = {};
-      db.sales.filter(s => s.status === 'Completed').forEach(s => {
-        productTotals[s.items] = (productTotals[s.items] || 0) + s.amount;
-      });
-      const sorted = Object.entries(productTotals).sort((a, b) => b[1] - a[1]).slice(0, 4);
-      if (sorted.length === 0) return `<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0">No sales recorded yet.</div>`;
-      return sorted.map(([name, val], i) => `
+          const productTotals = {};
+          db.sales.filter(s=>s.status==='Completed').forEach(s => {
+            productTotals[s.items] = (productTotals[s.items] || 0) + s.amount;
+          });
+          const sorted = Object.entries(productTotals).sort((a,b)=>b[1]-a[1]).slice(0,4);
+          if (sorted.length === 0) return `<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0">No sales recorded yet.</div>`;
+          return sorted.map(([name,val],i) => `
             <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
-              <span style="width:18px;color:var(--muted);font-size:13px">${i + 1}</span>
+              <span style="width:18px;color:var(--muted);font-size:13px">${i+1}</span>
               <div style="flex:1;font-size:13px">${name}</div>
               <span style="color:var(--accent);font-size:12px;font-weight:600">${formatMoney(val)}</span>
             </div>`).join('');
-    })()}
+        })()}
       </div>
       <div class="card">
         <div class="card-title" style="margin-bottom:12px">Summary</div>
-        ${[['Total Revenue', formatMoney(revenue)], ['Total Expenses', formatMoney(expenses)], ['Net Profit', formatMoney(revenue - expenses)], ['Products', db.inventory.length + ''], ['Customers', db.customers.length + ''], ['Transactions', db.sales.length + '']].map(([l, v]) => `
+        ${[['Total Revenue',formatMoney(revenue)],['Total Expenses',formatMoney(expenses)],['Net Profit',formatMoney(revenue-expenses)],['Products',db.inventory.length+''],['Customers',db.customers.length+''],['Transactions',db.sales.length+'']].map(([l,v])=>`
           <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--surface2);font-size:13px">
             <span style="color:var(--muted)">${l}</span><span style="font-weight:600">${v}</span>
           </div>`).join('')}
@@ -1411,23 +1430,19 @@ function renderReports() {
     </div>`;
 
   setTimeout(() => {
-    const c = CURRENCIES[activeCurrency];
-    const wRev = weeklySalesUGX.map(v => +(v * c.rate).toFixed(c.dec));
-    const wExp = new Array(7).fill(0).map(v => +(v * c.rate).toFixed(c.dec));
-    const el = document.getElementById('chartRep');
+    const c    = CURRENCIES[activeCurrency];
+    const wRev = weeklySalesUGX.map(v => +(v*c.rate).toFixed(c.dec));
+    const wExp = new Array(7).fill(0).map(v => +(v*c.rate).toFixed(c.dec));
+    const el   = document.getElementById('chartRep');
     if (el) new Chart(el, {
-      type: 'line',
-      data: {
-        labels: weeklyLabels, datasets: [
-          { label: 'Revenue', data: wRev, borderColor: '#F59E0B', backgroundColor: '#F59E0B22', tension: 0.4, fill: true },
-          { label: 'Expenses', data: wExp, borderColor: '#F85149', backgroundColor: '#F8514922', tension: 0.4, fill: true }
-        ]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#8B949E', boxWidth: 12, font: { size: 12 } } } },
-        scales: { x: { ticks: { color: '#8B949E' }, grid: { color: '#30363D44' } }, y: { ticks: { color: '#8B949E', callback: v => formatAxisVal(v) }, grid: { color: '#30363D44' } } }
-      }
+      type:'line',
+      data:{labels:weeklyLabels, datasets:[
+        {label:'Revenue',  data:wRev, borderColor:'#F59E0B', backgroundColor:'#F59E0B22', tension:0.4, fill:true},
+        {label:'Expenses', data:wExp, borderColor:'#F85149', backgroundColor:'#F8514922', tension:0.4, fill:true}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:'#8B949E',boxWidth:12,font:{size:12}}}},
+        scales:{x:{ticks:{color:'#8B949E'},grid:{color:'#30363D44'}},y:{ticks:{color:'#8B949E',callback:v=>formatAxisVal(v)},grid:{color:'#30363D44'}}}}
     });
   }, 100);
 }
@@ -1447,16 +1462,16 @@ function renderNotifications() {
     </div>
     <div class="card" id="notif-list">
       ${allNotifs.length === 0
-      ? `<div style="text-align:center;padding:48px;color:var(--muted)">
+        ? `<div style="text-align:center;padding:48px;color:var(--muted)">
              <div style="font-size:40px;margin-bottom:12px">🔔</div>
              <div style="font-size:15px;font-weight:600;margin-bottom:6px">No notifications yet</div>
              <div style="font-size:13px">Alerts for low stock, orders, and payments will appear here.</div>
            </div>`
-      : allNotifs.map((n, i) => `
-          <div class="log-item" id="notif-${i}" style="${n.read ? 'opacity:0.55' : ''}">
+        : allNotifs.map((n,i) => `
+          <div class="log-item" id="notif-${i}" style="${n.read?'opacity:0.55':''}">
             <div style="font-size:20px;line-height:1">${n.icon}</div>
             <div style="flex:1">
-              <div class="log-text" style="font-weight:${n.read ? '400' : '600'}">${n.title}</div>
+              <div class="log-text" style="font-weight:${n.read?'400':'600'}">${n.title}</div>
               <div class="log-time">${n.time}</div>
             </div>
             ${!n.read ? `<button class="btn btn-ghost btn-sm" onclick="markRead(${i})">Mark read</button><span class="badge badge-blue" style="font-size:10px">New</span>` : ''}
@@ -1478,9 +1493,9 @@ function markAllRead() {
 
 function updateNotifBadge() {
   const count = allNotifs.filter(n => !n.read).length;
-  const el = document.getElementById('notif-count');
+  const el    = document.getElementById('notif-count');
   if (el) { el.textContent = count; el.style.display = count > 0 ? 'inline' : 'none'; }
-  const dot = document.querySelector('.notif-dot');
+  const dot   = document.querySelector('.notif-dot');
   if (dot) dot.style.display = count > 0 ? 'block' : 'none';
 }
 
@@ -1509,7 +1524,7 @@ function renderSettings() {
           <div class="form-group">
             <label>Display Currency</label>
             <select id="settings-currency" onchange="changeCurrencyFromSettings(this.value)" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text)">
-              ${Object.entries(CURRENCIES).map(([code, info]) => `<option value="${code}" ${activeCurrency === code ? 'selected' : ''}>${code} — ${info.name}</option>`).join('')}
+              ${Object.entries(CURRENCIES).map(([code,info]) => `<option value="${code}" ${activeCurrency===code?'selected':''}>${code} — ${info.name}</option>`).join('')}
             </select>
           </div>
           <div class="form-group"><label>VAT Rate (%)</label><input type="number" id="vat-rate" style="width:100%" value="18" min="0" max="100"></div>
@@ -1522,19 +1537,69 @@ function renderSettings() {
         <!-- Security -->
         <div class="card">
           <div class="card-title" style="margin-bottom:16px">🔒 Security Settings</div>
-          ${[
-      ['Data Encryption', 'AES-256 encryption active', '✅ Active'],
-      ['Automatic Backup', 'Daily backup at 11:00 PM', '✅ Enabled'],
-      ['Activity Logging', 'All user actions logged', '✅ Active'],
-      ['Session Timeout', 'Auto-logout after 30 mins', '⚙️ 30 min'],
-      ['Two-Factor Auth', 'SMS verification', '⚠️ Setup needed'],
-    ].map(([t, d, s]) => `
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
-              <div><div style="font-size:13px;font-weight:600">${t}</div><div style="font-size:11px;color:var(--muted)">${d}</div></div>
-              <span style="font-size:12px;white-space:nowrap">${s}</span>
-            </div>`).join('')}
-          <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
-            <button class="btn btn-ghost btn-sm" onclick="toast('Backup started! 🗄️')">🗄️ Backup Now</button>
+
+          <!-- Session Timeout -->
+          <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div>
+                <div style="font-size:13px;font-weight:600">Session Timeout</div>
+                <div style="font-size:11px;color:var(--muted)">Auto-logout for Manager &amp; Employee after inactivity</div>
+              </div>
+              <span id="timeout-display" style="font-size:13px;color:var(--accent);font-weight:700">${appSettings.session_timeout_minutes} min</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="range" id="timeout-slider" min="5" max="120" step="5"
+                value="${appSettings.session_timeout_minutes}"
+                oninput="document.getElementById('timeout-display').textContent=this.value+' min';document.getElementById('timeout-input').value=this.value"
+                style="flex:1;accent-color:var(--accent)">
+              <input type="number" id="timeout-input" min="5" max="120" value="${appSettings.session_timeout_minutes}"
+                oninput="document.getElementById('timeout-slider').value=this.value;document.getElementById('timeout-display').textContent=this.value+' min'"
+                style="width:70px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:6px;color:var(--text);text-align:center">
+              <button class="btn btn-primary btn-sm" onclick="saveSecuritySetting('session_timeout_minutes', document.getElementById('timeout-input').value)">Save</button>
+            </div>
+          </div>
+
+          <!-- Role Login Toggles -->
+          <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+            <div style="font-size:13px;font-weight:600;margin-bottom:10px">Role Login Access</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div>
+                <div style="font-size:13px">Manager Logins</div>
+                <div style="font-size:11px;color:var(--muted)">Allow Managers to log in</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="toggle-manager" ${appSettings.manager_login_enabled ? 'checked' : ''}
+                  onchange="saveSecuritySetting('manager_login_enabled', this.checked.toString())"
+                  style="width:16px;height:16px;accent-color:var(--accent)">
+                <span id="toggle-manager-label" style="font-size:12px;color:var(--muted)">${appSettings.manager_login_enabled ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div>
+                <div style="font-size:13px">Employee Logins</div>
+                <div style="font-size:11px;color:var(--muted)">Allow Employees to log in</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="toggle-employee" ${appSettings.employee_login_enabled ? 'checked' : ''}
+                  onchange="saveSecuritySetting('employee_login_enabled', this.checked.toString())"
+                  style="width:16px;height:16px;accent-color:var(--accent)">
+                <span id="toggle-employee-label" style="font-size:12px;color:var(--muted)">${appSettings.employee_login_enabled ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Force Re-login -->
+          <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div>
+                <div style="font-size:13px;font-weight:600">Force All Users to Re-login</div>
+                <div style="font-size:11px;color:var(--muted)">Immediately invalidates every active session</div>
+              </div>
+              <button class="btn btn-danger btn-sm" onclick="forceReloginAll()">🔄 Force Re-login</button>
+            </div>
+          </div>
+
+          <div style="margin-top:14px">
             <button class="btn btn-ghost btn-sm" onclick="nav('users')">👥 Manage Users</button>
           </div>
         </div>
@@ -1551,22 +1616,18 @@ function renderSettings() {
         </div>
 
         <!-- Activity Log -->
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px">📋 Recent Activity Log</div>
-          ${[
-      ['Admin User logged in', 'Today 09:15 AM', 'var(--green)'],
-      ['New sale TXN-001 recorded', 'Today 09:32 AM', 'var(--accent)'],
-      ['Inventory: Juice +50 units', 'Today 10:00 AM', 'var(--blue)'],
-      ['Password changed for John Staff', 'Yesterday 3:00 PM', 'var(--orange)'],
-      ['Backup completed successfully', 'Yesterday 11:00 PM', 'var(--green)'],
-    ].map(([t, d, c]) => `
-            <div class="log-item">
-              <div class="log-dot" style="background:${c}"></div>
-              <div><div class="log-text">${t}</div><div class="log-time">${d}</div></div>
-            </div>`).join('')}
+        <div class="card" id="activity-log-card">
+          <div class="card-header">
+            <div class="card-title">📋 Real Activity Log</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadActivityLog()">🔄 Refresh</button>
+          </div>
+          <div id="activity-log-list" style="color:var(--muted);font-size:13px;padding:16px;text-align:center">Loading...</div>
         </div>
       </div>
     </div>`;
+
+  // Auto-load real activity log
+  setTimeout(loadActivityLog, 100);
 }
 
 function saveBizInfo() {
@@ -1581,16 +1642,87 @@ function changeCurrencyFromSettings(code) {
   changeCurrency(code);
 }
 
+// ── SECURITY SETTINGS FUNCTIONS ────────────────────────────────
+
+async function saveSecuritySetting(key, value) {
+  try {
+    await api('PUT', '/settings/' + key, { value });
+    appSettings[key] = (value === 'true') ? true : (value === 'false') ? false : value;
+    if (key === 'session_timeout_minutes') {
+      SESSION_TIMEOUT_MS = parseInt(value) * 60 * 1000;
+      appSettings.session_timeout_minutes = parseInt(value);
+    }
+    // Update label text for toggles
+    if (key === 'manager_login_enabled') {
+      const lbl = document.getElementById('toggle-manager-label');
+      if (lbl) lbl.textContent = value === 'true' ? 'Enabled' : 'Disabled';
+    }
+    if (key === 'employee_login_enabled') {
+      const lbl = document.getElementById('toggle-employee-label');
+      if (lbl) lbl.textContent = value === 'true' ? 'Enabled' : 'Disabled';
+    }
+    toast('Security setting saved! 🔒');
+    loadActivityLog();
+  } catch (err) { toast(err.message, 'danger'); }
+}
+
+async function forceReloginAll() {
+  if (!ask('Force ALL users (except you) to re-login immediately?\n\nTheir current sessions will be invalidated right now.')) return;
+  try {
+    await api('POST', '/settings/force-relogin');
+    toast('All sessions invalidated. Users will be logged out on their next action. 🔄', 'danger');
+    loadActivityLog();
+  } catch (err) { toast(err.message, 'danger'); }
+}
+
+async function loadActivityLog() {
+  const container = document.getElementById('activity-log-list');
+  if (!container) return;
+  try {
+    const logs = await api('GET', '/settings/activity-log');
+    if (logs.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">No activity recorded yet.</div>';
+      return;
+    }
+    const colorMap = {
+      'Login':            'var(--green)',
+      'Logout':           'var(--muted)',
+      'Sale recorded':    'var(--accent)',
+      'Stock added':      'var(--blue)',
+      'Stock deleted':    'var(--red)',
+      'Customer added':   'var(--blue)',
+      'Expense recorded': 'var(--orange)',
+      'User created':     'var(--purple)',
+      'User deleted':     'var(--red)',
+      'Setting changed':  'var(--orange)',
+      'Force re-login':   'var(--red)',
+    };
+    container.innerHTML = logs.map(log => {
+      const color = colorMap[log.action] || 'var(--muted)';
+      const ts    = new Date(log.timestamp).toLocaleString();
+      return `<div class="log-item">
+        <div class="log-dot" style="background:${color}"></div>
+        <div style="flex:1">
+          <div class="log-text"><strong>${log.user}</strong> — ${log.action}${log.detail ? ': <span style="color:var(--muted)">' + log.detail + '</span>' : ''}</div>
+          <div class="log-time">${ts}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    container.innerHTML = '<div style="color:var(--red);padding:12px">Could not load activity log.</div>';
+  }
+}
+
 
 /* ═══════════════════════════════════════════════════════════════
    PAGE: RAW MATERIALS
    ═══════════════════════════════════════════════════════════════ */
 function renderRawMaterials() {
-  const items = db.rawMaterials || [];
+  const items  = db.rawMaterials || [];
   const alerts = items.filter(i => i.status !== 'In Stock');
   document.getElementById('content-area').innerHTML = `
     ${alerts.length ? `<div class="alert alert-warn"><span>⚠️</span>
-    <strong>${alerts.length} items need attention:</strong> ${alerts.map(i => i.name).join(', ')}</div>` : ''}
+    <strong>${alerts.length} items need attention:</strong> ${alerts.map(i=>i.name).join(', ')}</div>` : ''}
     <div class="card-header" style="margin-bottom:16px">
       <div class="section-actions">
         <input class="search-bar" id="raw-search" placeholder="🔍 Search materials..." oninput="filterRaw(this.value)">
@@ -1602,9 +1734,9 @@ function renderRawMaterials() {
     </div>
     <div class="stat-grid" style="margin-bottom:20px">
       <div class="stat-card"><div class="stat-label">Total Materials</div><div class="stat-value">${items.length}</div></div>
-      <div class="stat-card"><div class="stat-label">In Stock</div><div class="stat-value" style="color:var(--green)">${items.filter(i => i.status === 'In Stock').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Low Stock</div><div class="stat-value" style="color:var(--orange)">${items.filter(i => i.status === 'Low Stock').length}</div></div>
-      <div class="stat-card"><div class="stat-label">Out of Stock</div><div class="stat-value" style="color:var(--red)">${items.filter(i => i.status === 'Out of Stock').length}</div></div>
+      <div class="stat-card"><div class="stat-label">In Stock</div><div class="stat-value" style="color:var(--green)">${items.filter(i=>i.status==='In Stock').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Low Stock</div><div class="stat-value" style="color:var(--orange)">${items.filter(i=>i.status==='Low Stock').length}</div></div>
+      <div class="stat-card"><div class="stat-label">Out of Stock</div><div class="stat-value" style="color:var(--red)">${items.filter(i=>i.status==='Out of Stock').length}</div></div>
     </div>
     <div class="card">
       <div class="card-header"><div class="card-title">Raw Material Inventory</div>
@@ -1619,7 +1751,7 @@ function renderRawMaterials() {
 
 function rawRow(m) {
   const pct = Math.min(Math.round((m.qty / Math.max(m.min * 3, 1)) * 100), 100);
-  const col = m.status === 'In Stock' ? 'var(--green)' : m.status === 'Low Stock' ? 'var(--orange)' : 'var(--red)';
+  const col = m.status==='In Stock' ? 'var(--green)' : m.status==='Low Stock' ? 'var(--orange)' : 'var(--red)';
   return `<tr data-name="${m.name.toLowerCase()}">
     <td style="color:var(--muted);font-size:12px">${m.id}</td>
     <td><strong>${m.name}</strong></td>
@@ -1669,7 +1801,7 @@ function openAddRawModal() {
       <div class="form-group"><label>Supplier</label>
         <select id="rm-sup" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text)">
           <option value="">-- No Supplier --</option>
-          ${(db.suppliers || []).map(s => `<option>${s.name}</option>`).join('')}
+          ${(db.suppliers||[]).map(s=>`<option>${s.name}</option>`).join('')}
         </select></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
@@ -1680,10 +1812,10 @@ function openAddRawModal() {
 
 async function saveRawMaterial() {
   const name = document.getElementById('rm-name').value.trim();
-  const qty = parseFloat(document.getElementById('rm-qty').value);
-  const min = parseFloat(document.getElementById('rm-min').value);
+  const qty  = parseFloat(document.getElementById('rm-qty').value);
+  const min  = parseFloat(document.getElementById('rm-min').value);
   const cost = parseFloat(document.getElementById('rm-cost').value);
-  if (!name || isNaN(qty) || isNaN(cost)) { toast('Please fill all required fields.', 'danger'); return; }
+  if (!name || isNaN(qty) || isNaN(cost)) { toast('Please fill all required fields.','danger'); return; }
   try {
     const mat = await api('POST', '/raw-materials', {
       name, unit: document.getElementById('rm-unit').value,
@@ -1716,9 +1848,9 @@ function editRaw(id) {
 }
 
 async function applyEditRaw(id) {
-  const m = (db.rawMaterials || []).find(x => x.id === id);
-  const qty = parseFloat(document.getElementById('er-qty').value);
-  const min = parseFloat(document.getElementById('er-min').value);
+  const m    = (db.rawMaterials || []).find(x => x.id === id);
+  const qty  = parseFloat(document.getElementById('er-qty').value);
+  const min  = parseFloat(document.getElementById('er-min').value);
   const cost = parseFloat(document.getElementById('er-cost').value);
   if (!m || isNaN(qty)) return;
   try {

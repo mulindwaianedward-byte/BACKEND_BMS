@@ -21,6 +21,7 @@ app.use('/api/suppliers',    require('./routes/suppliers'));
 app.use('/api/orders',       require('./routes/orders'));
 app.use('/api/expenses',     require('./routes/expenses'));
 app.use('/api/users',        require('./routes/users'));
+app.use('/api/settings',     require('./routes/settings'));
 
 // Fallback: serve index.html for any non-API route
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));

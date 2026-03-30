@@ -87,6 +87,19 @@ db.exec(`
     desc     TEXT NOT NULL,
     amount   REAL NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    user      TEXT NOT NULL,
+    action    TEXT NOT NULL,
+    detail    TEXT DEFAULT ''
+  );
 `);
 
 // Seed the admin user on first run
@@ -100,5 +113,15 @@ if (!existing) {
   `).run('USR-001', 'Mulindwa Ian Edward', 'mulindwaianedward@gmail.com', hashed, 'Admin', 'Active');
   console.log('✅ Admin user seeded.');
 }
+
+// Seed default settings
+const defaults = {
+  session_timeout_minutes: '20',
+  employee_login_enabled:  'true',
+  manager_login_enabled:   'true',
+  force_relogin_token:     Date.now().toString()
+};
+const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+Object.entries(defaults).forEach(([k, v]) => insertSetting.run(k, v));
 
 module.exports = db;
