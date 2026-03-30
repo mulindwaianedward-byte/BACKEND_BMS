@@ -13,24 +13,37 @@ router.get('/', auth, (req, res) => {
 // POST add user
 router.post('/', auth, (req, res) => {
   const { name, email, password, role } = req.body;
-  const count  = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-  const id     = 'USR-' + String(count + 1).padStart(3, '0');
-  const hashed = bcrypt.hashSync(password, 10);
 
-  db.prepare('INSERT INTO users (id, name, email, password, role, status) VALUES (?,?,?,?,?,?)')
-    .run(id, name, email, hashed, role, 'Active');
+  if (!name || !email || !password || !role)
+    return res.status(400).json({ error: 'All fields are required.' });
 
-  // Broadcast new user added
-  broadcast('new-user', {
-    icon:   '👤',
-    title:  `New user added: ${name}`,
-    detail: `Role: ${role}`,
-    time:   new Date().toISOString()
-  });
+  // Check for duplicate email BEFORE trying to insert
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  if (existing)
+    return res.status(400).json({ error: 'An account with this email already exists.' });
 
-  res.json({ id, name, email, role, status: 'Active', last_login: 'Never' });
+  try {
+    // Use a timestamp-based unique ID instead of COUNT — avoids collisions
+    const id     = 'USR-' + Date.now();
+    const hashed = bcrypt.hashSync(password, 10);
+
+    db.prepare('INSERT INTO users (id, name, email, password, role, status) VALUES (?,?,?,?,?,?)')
+      .run(id, name, email, hashed, role, 'Active');
+
+    broadcast('new-user', {
+      icon:   '👤',
+      title:  `New user added: ${name}`,
+      detail: `Role: ${role}`,
+      time:   new Date().toISOString()
+    });
+
+    res.json({ id, name, email, role, status: 'Active', last_login: 'Never' });
+
+  } catch (err) {
+    console.error('Create user error:', err.message);
+    res.status(500).json({ error: 'Could not create user. ' + err.message });
+  }
 });
-
 // PUT toggle block/unblock user
 router.put('/:id/block', auth, (req, res) => {
   const u         = db.prepare('SELECT status, name FROM users WHERE id=?').get(req.params.id);
