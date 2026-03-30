@@ -25,6 +25,57 @@ async function logActivity(action, detail = '') {
   try { await api('POST', '/settings/activity-log', { action, detail }); } catch(e) {}
 }
 
+/* ── SSE REAL-TIME CONNECTION ─────────────────────────────────
+   Opens a persistent connection to the server after login.
+   The server pushes events (login, sale, stock alert, new user)
+   directly to this browser without any polling or refresh.      */
+let sseSource = null;
+
+function connectSSE() {
+  if (sseSource) sseSource.close();
+  sseSource = new EventSource(API_BASE + '/api/events?token=' + authToken);
+
+  const handlers = {
+    'user-login':  e => pushNotif(JSON.parse(e.data)),
+    'user-logout': e => pushNotif(JSON.parse(e.data)),
+    'new-sale':    e => pushNotif(JSON.parse(e.data)),
+    'stock-alert': e => pushNotif(JSON.parse(e.data)),
+    'new-user':    e => pushNotif(JSON.parse(e.data)),
+  };
+  Object.entries(handlers).forEach(([evt, fn]) => sseSource.addEventListener(evt, fn));
+
+  sseSource.onerror = () => {
+    // Auto-reconnect after 5s if connection drops
+    setTimeout(() => { if (authToken) connectSSE(); }, 5000);
+  };
+}
+
+function disconnectSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+}
+
+// Push a real-time notification into the app
+function pushNotif(data) {
+  const { icon, title, detail, time } = data;
+  const ts = time ? new Date(time).toLocaleTimeString() : 'just now';
+
+  // Add to the in-memory allNotifs array so Notifications page shows it
+  allNotifs.unshift({ icon, title: detail ? `${title} — ${detail}` : title, time: ts, read: false });
+
+  // Update the notification badge count in the sidebar
+  updateNotifBadge();
+
+  // Show a toast popup regardless of which page the admin is on
+  toast(`${icon} ${title}`, 'info');
+
+  // If the Notifications page is currently open, refresh it live
+  if (currentSection === 'notifications') renderNotifications();
+
+  // If Settings is open, refresh the activity log
+  if (currentSection === 'settings') loadActivityLog();
+}
+/* ─────────────────────────────────────────────────────────── */
+
 async function loadAllData() {
   try {
     const [sales, stock, rawMats, customers, suppliers, expenses, users, orders, settings] =
@@ -229,6 +280,7 @@ async function doLogin() {
     startSessionTimer();
 
     await loadAllData();
+    connectSSE(); // open real-time connection
 
     const allowed = PERMISSIONS[currentUser.role] || [];
     nav(allowed[0] || 'sales');
@@ -244,7 +296,9 @@ function showLoginError(msg) {
 }
 
 function doLogout() {
-  logActivity('Logout', 'User logged out');
+  // Tell server about logout so it can broadcast to other admins
+  try { await fetch(API_BASE + '/api/auth/logout', { method:'POST', headers:{ Authorization:'Bearer '+authToken } }); } catch(e) {}
+  disconnectSSE();
   authToken = null;
   localStorage.removeItem('bms_token');
   clearSessionTimer(); // Stop the timeout clock when logging out

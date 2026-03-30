@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db     = require('../database');
 const auth   = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
+const { broadcast } = require('../sse');
 
 // GET all users (never return passwords)
 router.get('/', auth, (req, res) => {
@@ -19,12 +20,20 @@ router.post('/', auth, (req, res) => {
   db.prepare('INSERT INTO users (id, name, email, password, role, status) VALUES (?,?,?,?,?,?)')
     .run(id, name, email, hashed, role, 'Active');
 
+  // Broadcast new user added
+  broadcast('new-user', {
+    icon:   '👤',
+    title:  `New user added: ${name}`,
+    detail: `Role: ${role}`,
+    time:   new Date().toISOString()
+  });
+
   res.json({ id, name, email, role, status: 'Active', last_login: 'Never' });
 });
 
 // PUT toggle block/unblock user
 router.put('/:id/block', auth, (req, res) => {
-  const u         = db.prepare('SELECT status FROM users WHERE id=?').get(req.params.id);
+  const u         = db.prepare('SELECT status, name FROM users WHERE id=?').get(req.params.id);
   const newStatus = u.status === 'Blocked' ? 'Active' : 'Blocked';
   db.prepare('UPDATE users SET status=? WHERE id=?').run(newStatus, req.params.id);
   res.json({ status: newStatus });
