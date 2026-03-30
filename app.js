@@ -1,7 +1,7 @@
 /* ══ BACKEND API CONNECTION ════════════════════════════════════
    Replace API_BASE with your Railway URL when deployed.
    Leave as empty string '' to use same-origin (local server).   */
-const API_BASE = ''; // e.g. 'https://bms-backend.up.railway.app'
+const API_BASE = ''; // e.g. 'https://backendbms-production.up.railway.app'
 
 let authToken = localStorage.getItem('bms_token') || null;
 
