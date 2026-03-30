@@ -1,166 +1,186 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BMS — Business Management System</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Syne:wght@700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Syne:wght@700&family=JetBrains+Mono:wght@400&display=swap"
+    rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-<!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════
      LOGIN SCREEN
      ══════════════════════════════════════ -->
-<div id="login-screen">
-  <div class="login-box">
-    <div class="login-logo">◆ BMS</div>
-    <div class="login-subtitle">Business Management System · Kampala, UG</div>
+  <div id="login-screen">
+    <div class="login-box">
+      <div class="login-logo">◆ BMS</div>
+      <div class="login-subtitle">Business Management System · Kampala, UG</div>
 
-    <div class="form-group">
-      <label>Email Address</label>
-      <input type="email" id="login-email" placeholder="your@email.com" autocomplete="email">
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="login-email" placeholder="your@email.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-pass" placeholder="Enter your password" autocomplete="current-password">
+      </div>
+
+      <div id="login-error" class="login-error" style="display:none"></div>
+
+      <button class="btn btn-primary btn-full" onclick="doLogin()">Sign In →</button>
+
     </div>
-    <div class="form-group">
-      <label>Password</label>
-      <input type="password" id="login-pass" placeholder="Enter your password" autocomplete="current-password">
-    </div>
-
-    <div id="login-error" class="login-error" style="display:none"></div>
-
-    <button class="btn btn-primary btn-full" onclick="doLogin()">Sign In →</button>
-
   </div>
-</div>
 
 
-<!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════
      MAIN APPLICATION
      ══════════════════════════════════════ -->
-<div id="app">
-  <div class="layout">
+  <div id="app">
+    <div class="layout">
 
-    <!-- ── SIDEBAR ── -->
-    <nav class="sidebar" id="sidebar">
+      <!-- ── SIDEBAR ── -->
+      <nav class="sidebar" id="sidebar">
 
-      <div class="sidebar-brand">
-        <div class="brand-name">◆ BMS</div>
-        <div class="brand-biz" id="biz-name">Your Business Name</div>
-      </div>
-
-      <div class="sidebar-user">
-        <div class="avatar" id="user-avatar">AD</div>
-        <div class="user-info">
-          <div class="user-name" id="user-name-nav">Loading…</div>
-          <div class="user-role" id="user-role-nav">–</div>
+        <div class="sidebar-brand">
+          <div class="brand-name">◆ BMS</div>
+          <div class="brand-biz" id="biz-name">M.I.A</div>
         </div>
-      </div>
 
-      <!--
+        <div class="sidebar-user">
+          <div class="avatar" id="user-avatar">AD</div>
+          <div class="user-info">
+            <div class="user-name" id="user-name-nav">Loading…</div>
+            <div class="user-role" id="user-role-nav">–</div>
+          </div>
+        </div>
+
+        <!--
         EACH nav-item has data-section="…" and data-roles="…"
         data-roles lists which roles CAN see this item.
         applyPermissions() hides the ones the current user can't access.
       -->
-      <div class="nav-section">
-        <div class="nav-label">Main</div>
-        <div class="nav-item" data-section="dashboard"    data-roles="Admin,Manager"          onclick="nav('dashboard')">   <span class="nav-icon">📊</span><span>Dashboard</span></div>
-        <div class="nav-item" data-section="sales"        data-roles="Admin,Manager,Employee"  onclick="nav('sales')">        <span class="nav-icon">💰</span><span>Sales</span></div>
-        <div class="nav-item" data-section="orders"       data-roles="Admin"                   onclick="nav('orders')">       <span class="nav-icon">📦</span><span>Orders</span></div>
-        <div class="nav-item" data-section="inventory"    data-roles="Admin,Manager"           onclick="nav('inventory')">    <span class="nav-icon">🗄️</span><span>Inventory</span></div>
-        <div class="nav-item" data-section="rawMaterials" data-roles="Admin,Manager"           onclick="nav('rawMaterials')"> <span class="nav-icon">🧪</span><span>Raw Materials</span></div>
-      </div>
-
-      <div class="nav-section">
-        <div class="nav-label">People</div>
-        <div class="nav-item" data-section="customers"    data-roles="Admin,Manager,Employee"  onclick="nav('customers')">   <span class="nav-icon">👥</span><span>Customers</span></div>
-        <div class="nav-item" data-section="suppliers"    data-roles="Admin"                   onclick="nav('suppliers')">   <span class="nav-icon">🚚</span><span>Suppliers</span></div>
-        <div class="nav-item" data-section="users"        data-roles="Admin"                   onclick="nav('users')">       <span class="nav-icon">🔑</span><span>Users</span></div>
-      </div>
-
-      <div class="nav-section">
-        <div class="nav-label">Finance</div>
-        <div class="nav-item" data-section="finance"      data-roles="Admin"                   onclick="nav('finance')">     <span class="nav-icon">📈</span><span>Financial</span></div>
-        <div class="nav-item" data-section="reports"      data-roles="Admin,Manager"           onclick="nav('reports')">     <span class="nav-icon">📋</span><span>Reports</span></div>
-      </div>
-
-      <div class="nav-section">
-        <div class="nav-label">System</div>
-        <div class="nav-item" data-section="notifications" data-roles="Admin,Manager,Employee" onclick="nav('notifications')">
-          <span class="nav-icon">🔔</span><span>Notifications</span><span class="nav-badge" id="notif-count" style="display:none">0</span>
+        <div class="nav-section">
+          <div class="nav-label">Main</div>
+          <div class="nav-item" data-section="dashboard" data-roles="Admin,Manager" onclick="nav('dashboard')"> <span
+              class="nav-icon">📊</span><span>Dashboard</span></div>
+          <div class="nav-item" data-section="sales" data-roles="Admin,Manager,Employee" onclick="nav('sales')"> <span
+              class="nav-icon">💰</span><span>Sales</span></div>
+          <div class="nav-item" data-section="orders" data-roles="Admin" onclick="nav('orders')"> <span
+              class="nav-icon">📦</span><span>Orders</span></div>
+          <div class="nav-item" data-section="inventory" data-roles="Admin,Manager" onclick="nav('inventory')"> <span
+              class="nav-icon">🗄️</span><span>Inventory</span></div>
+          <div class="nav-item" data-section="rawMaterials" data-roles="Admin,Manager" onclick="nav('rawMaterials')">
+            <span class="nav-icon">🧪</span><span>Raw Materials</span></div>
         </div>
-        <div class="nav-item" data-section="settings"     data-roles="Admin"                   onclick="nav('settings')">   <span class="nav-icon">⚙️</span><span>Settings</span></div>
-        <div class="nav-item" data-section="__logout__"   data-roles="Admin,Manager,Employee"  onclick="doLogout()">         <span class="nav-icon">🚪</span><span>Logout</span></div>
-      </div>
 
-    </nav>
-    <!-- ── END SIDEBAR ── -->
+        <div class="nav-section">
+          <div class="nav-label">People</div>
+          <div class="nav-item" data-section="customers" data-roles="Admin,Manager,Employee" onclick="nav('customers')">
+            <span class="nav-icon">👥</span><span>Customers</span></div>
+          <div class="nav-item" data-section="suppliers" data-roles="Admin" onclick="nav('suppliers')"> <span
+              class="nav-icon">🚚</span><span>Suppliers</span></div>
+          <div class="nav-item" data-section="users" data-roles="Admin" onclick="nav('users')"> <span
+              class="nav-icon">🔑</span><span>Users</span></div>
+        </div>
 
+        <div class="nav-section">
+          <div class="nav-label">Finance</div>
+          <div class="nav-item" data-section="finance" data-roles="Admin" onclick="nav('finance')"> <span
+              class="nav-icon">📈</span><span>Financial</span></div>
+          <div class="nav-item" data-section="reports" data-roles="Admin,Manager" onclick="nav('reports')"> <span
+              class="nav-icon">📋</span><span>Reports</span></div>
+        </div>
 
-    <!-- ── MAIN CONTENT ── -->
-    <div class="main">
-
-      <div class="topbar">
-        <div class="page-title" id="page-title">Dashboard</div>
-        <div class="topbar-right">
-          <!-- Currency Selector — changes ALL money values instantly -->
-          <div class="currency-wrap">
-            <select id="currency-select" onchange="changeCurrency(this.value)" title="Change display currency">
-              <option value="UGX">🇺🇬 UGX</option>
-              <option value="USD">🇺🇸 USD</option>
-              <option value="KES">🇰🇪 KES</option>
-              <option value="EUR">🇪🇺 EUR</option>
-              <option value="GBP">🇬🇧 GBP</option>
-              <option value="TZS">🇹🇿 TZS</option>
-            </select>
+        <div class="nav-section">
+          <div class="nav-label">System</div>
+          <div class="nav-item" data-section="notifications" data-roles="Admin,Manager,Employee"
+            onclick="nav('notifications')">
+            <span class="nav-icon">🔔</span><span>Notifications</span><span class="nav-badge" id="notif-count"
+              style="display:none">0</span>
           </div>
-          <button class="notif-btn" onclick="nav('notifications')" title="Notifications">
-            🔔<span class="notif-dot"></span>
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="doLogout()">Logout</button>
+          <div class="nav-item" data-section="settings" data-roles="Admin" onclick="nav('settings')"> <span
+              class="nav-icon">⚙️</span><span>Settings</span></div>
+          <div class="nav-item" data-section="__logout__" data-roles="Admin,Manager,Employee" onclick="doLogout()">
+            <span class="nav-icon">🚪</span><span>Logout</span></div>
         </div>
-      </div>
 
-      <!-- All page content loads here -->
-      <div class="content" id="content-area">
-        <div style="padding:60px;text-align:center;color:var(--muted)">Loading…</div>
+      </nav>
+      <!-- ── END SIDEBAR ── -->
+
+
+      <!-- ── MAIN CONTENT ── -->
+      <div class="main">
+
+        <div class="topbar">
+          <div class="page-title" id="page-title">Dashboard</div>
+          <div class="topbar-right">
+            <!-- Currency Selector — changes ALL money values instantly -->
+            <div class="currency-wrap">
+              <select id="currency-select" onchange="changeCurrency(this.value)" title="Change display currency">
+                <option value="UGX">🇺🇬 UGX</option>
+                <option value="USD">🇺🇸 USD</option>
+                <option value="KES">🇰🇪 KES</option>
+                <option value="EUR">🇪🇺 EUR</option>
+                <option value="GBP">🇬🇧 GBP</option>
+                <option value="TZS">🇹🇿 TZS</option>
+              </select>
+            </div>
+            <button class="notif-btn" onclick="nav('notifications')" title="Notifications">
+              🔔<span class="notif-dot"></span>
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="doLogout()">Logout</button>
+          </div>
+        </div>
+
+        <!-- All page content loads here -->
+        <div class="content" id="content-area">
+          <div style="padding:60px;text-align:center;color:var(--muted)">Loading…</div>
+        </div>
+
       </div>
+      <!-- ── END MAIN CONTENT ── -->
 
     </div>
-    <!-- ── END MAIN CONTENT ── -->
-
   </div>
-</div>
 
 
-<!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════
      MODAL — used for forms / popups
      ══════════════════════════════════════ -->
-<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
-  <div class="modal" id="modal-box">
-    <div class="modal-header">
-      <div class="modal-title" id="modal-title"></div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+  <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+    <div class="modal" id="modal-box">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-title"></div>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div id="modal-body"></div>
     </div>
-    <div id="modal-body"></div>
   </div>
-</div>
 
 
-<!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════
      ACCESS DENIED SCREEN
      Shown when a user tries to reach a
      page they don't have permission for
      ══════════════════════════════════════ -->
-<div id="access-denied" style="display:none;padding:60px;text-align:center">
-  <div style="font-size:48px;margin-bottom:16px">🔒</div>
-  <div style="font-size:20px;font-weight:700;margin-bottom:8px">Access Denied</div>
-  <div style="color:var(--muted);font-size:14px">You don't have permission to view this page.<br>Contact your administrator.</div>
-</div>
+  <div id="access-denied" style="display:none;padding:60px;text-align:center">
+    <div style="font-size:48px;margin-bottom:16px">🔒</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Access Denied</div>
+    <div style="color:var(--muted);font-size:14px">You don't have permission to view this page.<br>Contact your
+      administrator.</div>
+  </div>
 
 
-<!-- JavaScript — always at the very bottom -->
-<script src="app.js"></script>
+  <!-- JavaScript — always at the very bottom -->
+  <script src="app.js"></script>
 
 </body>
+
 </html>
