@@ -295,7 +295,7 @@ function showLoginError(msg) {
   el.style.display  = 'block';
 }
 
-function doLogout() {
+async function doLogout() {
   // Tell server about logout so it can broadcast to other admins
   try { await fetch(API_BASE + '/api/auth/logout', { method:'POST', headers:{ Authorization:'Bearer '+authToken } }); } catch(e) {}
   disconnectSSE();
